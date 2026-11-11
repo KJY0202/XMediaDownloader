@@ -1,0 +1,7 @@
+This application uses gallery-dl, a third-party project distributed under GPL-2.0-only.
+Project: https://github.com/mikf/gallery-dl
+License: https://github.com/mikf/gallery-dl/blob/master/LICENSE
+
+This application also installs the gallery-dl [extra] dependencies for its build,
+including yt-dlp. Review and comply with the license terms of each bundled
+third-party dependency before redistributing packaged binaries.
