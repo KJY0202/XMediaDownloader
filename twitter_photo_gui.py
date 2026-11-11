@@ -72,11 +72,14 @@ def build_command(
     browser: str,
     output_dir: str,
     media_mode: str,
+    cookie_file: str = "",
 ) -> tuple[list[str], str]:
     """Build a gallery-dl command for X search.
 
     X's `until:` bound is exclusive, so the caller passes end-date + one day.
     gallery-dl's Twitter video setting lives under extractor.twitter.videos.
+    If cookie_file is given, it is used (--cookies); otherwise cookies are
+    read directly from the chosen browser (--cookies-from-browser).
     """
     if media_mode == "사진만":
         filter_term = "images"
@@ -103,8 +106,12 @@ def build_command(
         # in development and in a PyInstaller-frozen application.
         executable = [sys.executable, str(Path(__file__).resolve()), "--run-gdl"]
 
-    command = executable + [
-        "--cookies-from-browser", browser,
+    cookie_args = (
+        ["--cookies", cookie_file] if cookie_file
+        else ["--cookies-from-browser", browser]
+    )
+
+    command = executable + cookie_args + [
         "--destination", output_dir,
         "--sleep-request", "2",
         "--download-archive", str(Path(output_dir) / ".x-media-download-archive.sqlite3"),
@@ -118,8 +125,8 @@ class DownloaderApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{APP_NAME}  {APP_VERSION}")
-        self.geometry("850x720")
-        self.minsize(700, 610)
+        self.geometry("850x780")
+        self.minsize(700, 660)
 
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.worker_thread: threading.Thread | None = None
@@ -220,6 +227,16 @@ class DownloaderApp(tk.Tk):
         ttk.Entry(settings, textvariable=self.output_var).grid(row=3, column=1, columnspan=2, sticky="ew", pady=6)
         ttk.Button(settings, text="폴더 선택", command=self._choose_folder).grid(row=3, column=3, sticky="e", padx=(8, 0), pady=6)
 
+        ttk.Label(settings, text="cookies.txt").grid(row=4, column=0, sticky="w", padx=(0, 10), pady=6)
+        self.cookie_var = tk.StringVar()
+        ttk.Entry(settings, textvariable=self.cookie_var).grid(row=4, column=1, columnspan=2, sticky="ew", pady=6)
+        ttk.Button(settings, text="파일 선택", command=self._choose_cookie).grid(row=4, column=3, sticky="e", padx=(8, 0), pady=6)
+        ttk.Label(
+            settings,
+            text="비워두면 위의 '로그인 브라우저'에서 쿠키를 읽습니다. 크롬에서 오류가 나면 cookies.txt를 선택하세요.",
+            style="Sub.TLabel",
+        ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(0, 2))
+
         log_box = ttk.LabelFrame(root, text="  3  진행 로그  ", padding=10)
         log_box.grid(row=3, column=0, sticky="nsew", pady=(0, 11))
         log_box.columnconfigure(0, weight=1)
@@ -260,6 +277,15 @@ class DownloaderApp(tk.Tk):
         selected = filedialog.askdirectory(initialdir=self.output_var.get() or str(Path.home()))
         if selected:
             self.output_var.set(selected)
+
+    def _choose_cookie(self) -> None:
+        selected = filedialog.askopenfilename(
+            title="cookies.txt 파일 선택",
+            initialdir=str(Path.home() / "Downloads"),
+            filetypes=[("cookies.txt", "*.txt"), ("모든 파일", "*.*")],
+        )
+        if selected:
+            self.cookie_var.set(selected)
 
     def _log(self, message: str) -> None:
         self.log_text.configure(state="normal")
@@ -310,6 +336,11 @@ class DownloaderApp(tk.Tk):
             messagebox.showwarning("저장 위치", "저장 폴더를 선택해 주세요.")
             return
 
+        cookie_file = self.cookie_var.get().strip().strip('"')
+        if cookie_file and not Path(cookie_file).is_file():
+            messagebox.showwarning("cookies.txt 확인", f"cookies.txt 파일을 찾을 수 없습니다:\n{cookie_file}")
+            return
+
         try:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -324,11 +355,23 @@ class DownloaderApp(tk.Tk):
         self.progress.start(12)
         self._log(f"작업 시작 · 계정 {len(accounts)}개 · {self.media_var.get()}")
         self._log(f"저장 위치 · {output_dir}")
+        if cookie_file:
+            self._log(f"로그인 방식 · cookies.txt ({Path(cookie_file).name})")
+        else:
+            self._log(f"로그인 방식 · 브라우저 쿠키 ({self.browser_var.get()})")
         self.status_var.set(f"준비 중... (0/{len(accounts)} 계정)")
 
         self.worker_thread = threading.Thread(
             target=self._run_accounts,
-            args=(accounts, start_text, end_exclusive, output_dir, self.browser_var.get(), self.media_var.get()),
+            args=(
+                accounts,
+                start_text,
+                end_exclusive,
+                output_dir,
+                self.browser_var.get(),
+                self.media_var.get(),
+                cookie_file,
+            ),
             daemon=True,
         )
         self.worker_thread.start()
@@ -341,6 +384,7 @@ class DownloaderApp(tk.Tk):
         output_dir: str,
         browser: str,
         media_mode: str,
+        cookie_file: str,
     ) -> None:
         failed: list[str] = []
         processed = 0
@@ -349,7 +393,9 @@ class DownloaderApp(tk.Tk):
             if self.stop_event.is_set():
                 break
             self.events.put(("status", f"{account} 다운로드 중... ({index}/{len(accounts)})"))
-            command, query = build_command(account, start_date, end_exclusive, browser, output_dir, media_mode)
+            command, query = build_command(
+                account, start_date, end_exclusive, browser, output_dir, media_mode, cookie_file
+            )
             self.events.put(("log", f"\n[{index}/{len(accounts)}] @{account}"))
             self.events.put(("log", f"검색 조건 · {query}"))
 
